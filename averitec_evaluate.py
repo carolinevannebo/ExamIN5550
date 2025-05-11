@@ -1,5 +1,5 @@
 import pandas as pd
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, InferenceClient
 import json
 import numpy as np
 import scipy
@@ -9,14 +9,20 @@ import tqdm
 import time
 import argparse
 import copy
+import torch
 # import properties
+
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    pipeline,
+)
 import google.generativeai as genai
 import pandas as pd
 import os
 import sys
 import importlib
 import re
-from openai import OpenAI
 
 
 
@@ -274,10 +280,29 @@ class EV2REvaluator:
     MAX_TOKENS = 3000
     TEMPERATURE = 0
 
-    # -------------------------
-    llamaapi_api_token = ""     # To obtain the LLAMA API token, please visit this URL: https://console.llmapi.com/en/dashboard
-    llamaapi_client = OpenAI(api_key=llamaapi_api_token, base_url="https://api.llmapi.com/")
-    # -------------------------
+    hf_token = os.environ["HUGGING_FACE_HUB_TOKEN"]
+
+    MODEL_PATH = "/cluster/work/projects/ec403/models--meta-llama--Llama-3.1-8B-Instruct"
+
+    # Load tokenizer & model from disk
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
+    model     = AutoModelForCausalLM.from_pretrained(
+        MODEL_PATH,
+        torch_dtype="auto",
+        device_map="auto",          
+    )
+
+    # Create a chat‐style pipeline
+    chat = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        temperature=TEMPERATURE,
+        max_new_tokens=MAX_TOKENS,
+        truncation=True,
+        do_sample=True,
+    )
+
 
     def __init__(self, properties=None):
         self.properties = properties
@@ -335,26 +360,10 @@ class EV2REvaluator:
 
         return pred_questions, ref_questions, pred_qa_pairs, ref_qa_pairs
 
-    def query_llama33_llamaapi(self, prompt):
-        try:
-            messages = [
-                {"role": "user", "content": prompt},
-            ]
-
-            completion = self.llamaapi_client.chat.completions.create(
-                messages=messages,
-                model="llama3.3-70b",
-                temperature=self.TEMPERATURE,
-                max_tokens=self.MAX_TOKENS
-            )
-            response_llm = completion.choices[0].message.content
-            matches = re.findall(r'\{(.*?)\}', response_llm, re.DOTALL)
-            response = "{" + matches[0] + "}"
-            return response
-
-        except Exception as e:
-            print(e)
-            return ""
+    def query_huggingface_inference(self, prompt):
+        result = self.chat(prompt, max_new_tokens=self.MAX_TOKENS)
+        # result is a list of dicts: [{"generated_text": "..."}]
+        return result[0]["generated_text"]
 
 
     def prepare_prompt(self, tgt_sample, pred_sample, input_type):
@@ -458,7 +467,7 @@ class EV2REvaluator:
             attempt = 0
             while attempt < self.MAX_RETRIES:
                 try:
-                    response = self.query_llama33_llamaapi(prompt)
+                    response = self.query_huggingface_inference(prompt)
                     responses.append(self.process_output(tgt_sample, response))
                     print("One request successfully processed..")
                     break

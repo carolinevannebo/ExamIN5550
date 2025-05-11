@@ -4,6 +4,7 @@ import argparse
 from nltk.translate.meteor_score import single_meteor_score
 from nltk import word_tokenize
 import nltk
+import time
 
 from typing import List, Tuple, Dict
 import random
@@ -37,7 +38,7 @@ def serialize_av_pairs_from_pred(pred_example):
         lines.append(f"{ev['question']}\t\t\n{ev['answer']}")
     return "\t\t\n\n".join(lines)
 
-def compute_metrics_for_example(gold_ex, pred_ex, averi_scorer, ev2r_scorer):
+def compute_metrics_for_example(gold_ex, pred_ex, averi_scorer, ev2r_scorer, times):
     # One level dataframes 
     serial_gold = {
         "claim": gold_ex["claim"],
@@ -59,30 +60,57 @@ def compute_metrics_for_example(gold_ex, pred_ex, averi_scorer, ev2r_scorer):
     out = {}
 
     #  AVeriTeC Q-only (Hungarian-Meteor)
+    print("\tCalculating Q-only (Hungarian-Meteor)…")
+    start = time.perf_counter()
     q_only_score, [q_only_list] = averi_scorer.evaluate_questions_only(df_pred, df_gold)
-    out["Q-only (Hungarian-meteor)"] = q_only_list
+    elapsed = time.perf_counter() - start
+    out["Q-only (Hungarian-Meteor)"] = (q_only_list, elapsed)
+    print(f"\tQ-only took {elapsed:.4f}s, score = {q_only_list:.4f}")
 
-    #  AVeriTeC Q+A (Hungarian-Meteor)
+    # AVeriTeC Q+A (Hungarian-Meteor)
+    print("\tCalculating Q+A (Hungarian-Meteor)…")
+    start = time.perf_counter()
     qa_score, [qa_list] = averi_scorer.evaluate_questions_and_answers(df_pred, df_gold)
-    out["Q+A (Hungarian-meteor)"] = qa_list
+    elapsed = time.perf_counter() - start
+    out["Q+A (Hungarian-Meteor)"] = (qa_list, elapsed)
+    print(f"\tQ+A took {elapsed:.4f}s, score = {qa_list:.4f}")
 
-    # AVeriTeC end-to-end (label+evi) 
+    # AVeriTeC end-to-end (label+evi)
+    print("\tCalculating AVeriTeC end-to-end…")
+    start = time.perf_counter()
     ave_score, [ave_list] = averi_scorer.evaluate_averitec_score(df_pred, df_gold)
-    out["AVeriTeC end-to-end"] = ave_list
+    elapsed = time.perf_counter() - start
+    out["AVeriTeC end-to-end"] = (ave_list, elapsed)
+    print(f"\tEnd-to-end took {elapsed:.4f}s, score = {ave_list:.4f}")
 
     #  EV2R Q-only recall
-    # prepare_dataset gives us lists of AveritecEntry objects
+    print("\tCalculating EV2R Q-only recall…")
+    start = time.perf_counter()
     pred_q, ref_q, pred_qa, ref_qa = ev2r_scorer.prepare_dataset(df_pred, df_gold)
     q_resps = ev2r_scorer.prompt_api_model(pred_q, ref_q, input_type="question")
     q_scores = ev2r_scorer.calculate_question_scores(q_resps)
     ev2r_q_recall, [q_recalls] = ev2r_scorer.extract_recall_score(q_scores)
-    out["EV2R Q-only recall"] = q_recalls
+    elapsed = time.perf_counter() - start
+    out["EV2R Q-only recall"] = (q_recalls, elapsed)
+    print(f"\t→ EV2R Q-only took {elapsed:.4f}s, score = {q_recalls:.4f}")
 
-    # EV2R Q+A recall
+    #  EV2R Q+A recall
+    print("\tCalculating EV2R Q+A recall…")
+    start = time.perf_counter()
+    print("\t\tPrompting model")
     qa_resps = ev2r_scorer.prompt_api_model(pred_qa, ref_qa, input_type="qa_pair")
+    print("\t\tCalculating score")
     qa_scores = ev2r_scorer.calculate_prediction_scores(qa_resps)
     ev2r_qa_recall, [qa_recalls] = ev2r_scorer.extract_recall_score(qa_scores)
-    out["EV2R Q+A recall"] = qa_recalls
+    elapsed = time.perf_counter() - start
+    out["EV2R Q+A recall"] = (qa_recalls, elapsed)
+    print(f"\tEV2R Q+A took {elapsed:.4f}s, score = {qa_recalls:.4f}")
+
+
+    # Set times dict for calculating averages
+    # Will append the new time, or create a new dict for key
+    for k, (_, t) in results.items():
+        times.setdefault(k, []).append(t)
 
     return out
 
@@ -149,6 +177,10 @@ def main():
     n = min(args.examples, max_examples)
     example_idxs = random.sample(range(max_examples), n)
 
+    # Keep track metric calculation time
+    times = {}
+
+
     # Print each example
     for idx in example_idxs:
         print("\n" + "="*30 + f" Example {idx} " + "="*30 + "\n")
@@ -175,13 +207,23 @@ def main():
 
 
         # Compute scores
-        metrics = compute_metrics_for_example(current_gold, current_pred, averitec_scorer, ev2r_scorer)
+        print("Computing for example")
+        metrics = compute_metrics_for_example(current_gold, current_pred, averitec_scorer, ev2r_scorer, times)
 
+        print("Computing done")
+        
         # Print the values 
         for name, val_list in metrics.items():
             print(f"{name:25s} => {val_list[0]:.4f}")
 
     print("\nDone.")
+
+
+    # Calculate average times per metric, and print them 
+    print("\nAverage computation times per metric:")
+    for name, tlist in times.items():
+        avg = sum(tlist) / len(tlist)
+        print(f"  {name:20s} : {avg:.3f}s over {len(tlist)} examples")
 
 
         
