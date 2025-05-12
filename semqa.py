@@ -1,8 +1,9 @@
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, util
 import torch
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+import time
 
 class SemQA:
     def __init__(self, alpha=0.5, sentence_transformer_model_name="all-mpnet-base-v2", nli_model_name="facebook/bart-large-mnli", cache_dir="/tmp"):
@@ -21,6 +22,50 @@ class SemQA:
         self.alpha = alpha
 
 
+    def prepare_dataset(self, gold: dict, pred: dict):
+        # Extracting the questions and answers from the gold and pred datasets
+        gold_qs, gold_as = [], []
+        pred_qs, pred_as = [], []
+
+        # Pull out the raw lists
+        current_gold_qs = gold.get("questions", [])
+        if not current_gold_qs:
+            print("Warning: The gold dataset does not contain any questions.")
+            print("gold:", gold)
+            print("pred:", pred)
+            raise ValueError("The gold dataset must contain at least one question.")
+
+        # Build gold question and answer lists
+        for item in current_gold_qs:
+            q = item["question"]
+            a = item["answers"][0]["answer"]
+
+            if not a or not q:
+                raise ValueError("Gold: question or answer is empty: {} {}".format(q, a))
+
+            gold_qs.append(q)
+            gold_as.append(a)
+
+        # sanity check
+        if len(gold_qs) != len(gold_as):
+            raise ValueError("Gold: #questions != #answers")
+
+        # Now do the same for predictions
+        current_pred_qs = pred.get("evidence", [])
+        if not current_pred_qs:
+            raise ValueError("The pred dataset must contain at least one evidence item.")
+
+        for ev in current_pred_qs:
+            q = ev["question"]
+            a = ev.get("answer", "")
+            pred_qs.append(q)
+            pred_as.append(a)
+
+        if len(pred_qs) != len(pred_as):
+            raise ValueError("Pred: #questions != #answers")
+
+        return gold_qs, gold_as, pred_qs, pred_as
+
     def _calculate_Q_recall(self, gold_qs, pred_qs):
         # Encoding the questions
         q_emb_g = self.q_encoder.encode(gold_qs, convert_to_tensor=True)
@@ -38,7 +83,7 @@ class SemQA:
         self.row, self.col = sim_matrix
 
         # Similarity scores for the matched pairs
-        sims = 1 - cost[row, col] 
+        sims = 1 - cost[self.row, self.col] 
 
         # Q_recall is the mean of the similarity scores
         return sims.mean()
@@ -52,9 +97,9 @@ class SemQA:
         entail_scores = []
         for i,j in zip(self.row, self.col):
             premise, hypothesis = pred_as[j], gold_as[i]
-            enc = tok(premise, hypothesis, return_tensors="pt", truncation=True)
+            enc = self.tok(premise, hypothesis, return_tensors="pt", truncation=True)
             with torch.no_grad():
-                logits = nli(**enc).logits.squeeze()
+                logits = self.nli(**enc).logits.squeeze()
                 probs = torch.softmax(logits, dim=-1)
             # bart-mnli: labels are [contradiction, neutral, entailment]
             entail_scores.append((probs[1] + probs[2]).item())
@@ -63,14 +108,14 @@ class SemQA:
 
         return A_entail
 
-    def score(gold_qs, pred_qs, gold_as, pred_as):
+    def score(self, gold_qs, pred_qs, gold_as, pred_as):
         # Compute Q_recall
-        time = time.perf_counter()
+        start = time.perf_counter()
         Q_recall = self._calculate_Q_recall(gold_qs, pred_qs)
         q_recall_elapsed = time.perf_counter() - start
 
         # Compute A_entail
-        time = time.perf_counter()
+        start = time.perf_counter()
         A_entail = self.calculate_A_entail(gold_as, pred_as)    
         entail_elapsed = time.perf_counter() - start
 

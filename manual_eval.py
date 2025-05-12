@@ -6,6 +6,10 @@ import time
 import sys
 import os
 import importlib
+from semqa import SemQA
+import numbers
+import numpy as np
+
 
 import pandas as pd
 from averitec_evaluate import (
@@ -27,7 +31,7 @@ def serialize_av_pairs_from_pred(pred_example):
         lines.append(f"{ev['question']}\t\t\n{ev['answer']}")
     return "\t\t\n\n".join(lines)
 
-def compute_av_metrics_for_example(g, p, averi, times):
+def compute_av_metrics_for_example(g, p, averi, semqa_scorer, times):
     # wrap into 1-row DataFrames
     serial_gold = {
         "claim": g["claim"],
@@ -44,7 +48,9 @@ def compute_av_metrics_for_example(g, p, averi, times):
     df_gold = pd.DataFrame([serial_gold])
     df_pred = pd.DataFrame([serial_pred])
 
+    # Output dict for storing results
     out = {}
+
     # Q-only
     start = time.perf_counter()
     _, [q] = averi.evaluate_questions_only(df_pred, df_gold)
@@ -65,6 +71,23 @@ def compute_av_metrics_for_example(g, p, averi, times):
     t = time.perf_counter() - start
     out["AVeriTeC end-to-end"] = (ee, t)
     times.setdefault("AVeriTeC end-to-end", []).append(t)
+
+    # SemQA
+    gold_qs, gold_as, pred_qs, pred_as = semqa_scorer.prepare_dataset(g, p)
+    # print("\n\nGold Qs:", gold_qs)
+    # print("Gold As:", gold_as)
+    # print("Pred Qs:", pred_qs)
+    # print("Pred As:", pred_as, "\n\n")
+
+
+    print("SemQA scoring...")
+    res_dict = semqa_scorer.score(
+        gold_qs, pred_qs, gold_as, pred_as
+    )
+
+    # Extend out with res_dict
+    for k, v in res_dict.items():
+        out[k] = v
 
     return out
 
@@ -102,6 +125,9 @@ def main():
     properties = importlib.import_module("properties")
     ev2r_scorer = EV2REvaluator(properties)
 
+    # Create SemQA scorer
+    print("Creating SemQA scorer")
+    semqa_scorer = SemQA(cache_dir=DATASTORE_PATH)
 
     # Load prediciton file
     print("Reading prediction file")
@@ -137,30 +163,30 @@ def main():
         "label": g["label"], "id": g["id"]
     } for g in sub_gold])
 
-    # init scorers
-    averi = AVeriTeCEvaluator()
-    sys.path.append(os.path.dirname("properties.py"))
-    props = importlib.import_module("properties")
-    ev2r  = EV2REvaluator(props)
 
     # batch Ev2R
     print("Batching EV2R Q-only prompts…")
-    pred_q, ref_q, pred_qa, ref_qa = ev2r.prepare_dataset(df_preds, df_gold)
-    t0 = time.perf_counter()
-    q_resps  = ev2r.prompt_api_model(pred_q,  ref_q,  input_type="question")
-    t_q_batch = time.perf_counter()-t0
-
+    pred_q, ref_q, pred_qa, ref_qa = ev2r_scorer.prepare_dataset(df_preds, df_gold)
+    print(f"  {len(pred_q)} Q-only pairs")
+    print(f"  {len(pred_qa)} Q+A pairs")
+    start = time.perf_counter()
+    q_resps  = ev2r_scorer.prompt_api_model(pred_q,  ref_q,  input_type="question")
+    t_q_batch = time.perf_counter()- start
+ 
     print("Batching EV2R Q+A prompts…")
-    t0 = time.perf_counter()
-    qa_resps = ev2r.prompt_api_model(pred_qa, ref_qa, input_type="qa_pair")
-    t_qa_batch = time.perf_counter()-t0
-
+    start = time.perf_counter()
+    qa_resps = ev2r_scorer.prompt_api_model(pred_qa, ref_qa, input_type="qa_pair")
+    t_qa_batch = time.perf_counter() - start
+ 
     # extract recalls
-    _, q_recalls  = ev2r.extract_recall_score(ev2r.calculate_question_scores(q_resps))
-    _, qa_recalls = ev2r.extract_recall_score(ev2r.calculate_prediction_scores(qa_resps))
+    _ , q_recalls  = ev2r_scorer.extract_recall_score(ev2r_scorer.calculate_question_scores(q_resps))
+    _, qa_recalls = ev2r_scorer.extract_recall_score(ev2r_scorer.calculate_prediction_scores(qa_resps))
 
     # track AVeri times
     av_times = {}
+
+
+    semqa_times = {}
 
     # per‐example reporting
     for j, idx in enumerate(idxs):
@@ -170,13 +196,59 @@ def main():
         print("CLAIM:", g["claim"])
         print(f" Gold QA pairs: {len(g['questions'])}")
         print(f" Pred QA pairs: {len(p['evidence'])}\n")
+        print("GOLD:")
+        print(g, "\n")
+        print("GOLD Serialized:\n")
+        print(serialize_av_pairs_from_gold(g), "\n")
+        print("PRED:")
+        print(p, "\n")
+        print("PRED Serialized:\n")
+        print(serialize_av_pairs_from_pred(p), "\n")
 
-        av_res = compute_av_metrics_for_example(g,p, averi, av_times)
-        for name,(val,t) in av_res.items():
-            print(f"  {name:25s} → {val:.4f}   ({t:.3f}s)")
+        av_res = compute_av_metrics_for_example(g, p, averitec_scorer, semqa_scorer,  av_times)
+        for k,v in av_res.items():
+            # Dont print the elapsed times for semqa
+            if k in ["Q_recall_elapsed", "A_entail_elapsed"]:
+                continue
 
-        print(f"  {'EV2R Q-only recall':25s} → {q_recalls[j]:.4f}   (batched in {t_q_batch:.2f}s)")
-        print(f"  {'EV2R Q+A recall':25s} → {qa_recalls[j]:.4f}   (batched in {t_qa_batch:.2f}s)")
+
+            # Value can be dict, float or list depending on the metric
+            # Should print the key value pair wihout raising an error 
+            if ( isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], numbers.Number)):
+                # Data is a 2‐tuple: (score, elapsed)
+                raw_score, elapsed = v
+
+                # Scalar numeric score
+                if isinstance(raw_score, numbers.Number):
+                    score_str = f"{float(raw_score):.4f}"
+
+                # NumPy scalar 
+                elif isinstance(raw_score, np.generic):
+                    score_str = f"{float(raw_score):.4f}"
+
+                # Everything else (list, dict, etc.) → just str()
+                else:
+                    score_str = str(raw_score)
+
+                print(f"  {k:25s} => {score_str}   (took {elapsed:.2f}s)")
+            elif isinstance(v, float) or isinstance(v, numbers.Number):
+                print(f"  {k:25s} => {float(v):.4f}")
+            elif isinstance(v, list):
+                print(f"  {k:25s} => {v}")
+            elif isinstance(v, str):
+                print(f"  {k:25s} => {v}")
+            else:
+                # Should not happen
+                print(f"  {k:25s} => {v}")
+
+        # SemQA compute times
+        semqa_times.setdefault("Q-recall", []).append(av_res["Q_recall_elapsed"])
+        semqa_times.setdefault("A-entail", []).append(av_res["A_entail_elapsed"])
+
+        print(f"  {'Q-recall elapsed':25s} => {av_res['Q_recall_elapsed']:.4f}s")
+        print(f"  {'A-entail elapsed':25s} => {av_res['A_entail_elapsed']:.4f}s")
+        print(f"  {'EV2R Q-only recall':25s} => {q_recalls[j]:.4f}   (batched in {t_q_batch:.2f}s, time per example: {t_q_batch/len(pred_q):.2f}s)")
+        print(f"  {'EV2R Q+A recall':25s} => {qa_recalls[j]:.4f}   (batched in {t_qa_batch:.2f}s, time per example: {t_qa_batch/len(pred_qa):.2f}s)")
 
     # average AVeri times
     print("\nAverage AVeriTeC times:")

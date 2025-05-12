@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=in5550_home_exam
 #SBATCH --account=ec403
-#SBATCH --time=00:30:00
+#SBATCH --time=02:00:00
 #SBATCH --partition=accel    # To use the accelerator nodes
 #SBATCH --gpus=1
 #SBATCH --nodes=1

@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=in5550_home_exam
 #SBATCH --account=ec403
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --partition=accel    # To use the accelerator nodes
 #SBATCH --gpus=1
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=20G
-#SBATCH --cpus-per-task=12
+#SBATCH --mem-per-cpu=15G
+#SBATCH --cpus-per-task=8
 
 # NB: this script should be run with "sbatch sample.slurm"!
 # See https://www.uio.no/english/services/it/research/platforms/edu-research/help/fox/jobs/submitting.md
