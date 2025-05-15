@@ -6,20 +6,10 @@ from scipy.optimize import linear_sum_assignment
 import time
 
 class SemQA:
-    def __init__(self, alpha=0.5, sentence_transformer_model_name="all-mpnet-base-v2", nli_model_name="facebook/bart-large-mnli", cache_dir="/tmp"):
+    def __init__(self, encoder_model_name="all-mpnet-base-v2", cache_dir="/tmp"):
         # For question encoding
-        self.q_encoder_model_name = sentence_transformer_model_name
-        self.q_encoder = SentenceTransformer(sentence_transformer_model_name, cache_folder=cache_dir)
-
-        # For answer encoding, and NLI scoring
-        self.nli_model_name = nli_model_name
-        self.tok = AutoTokenizer.from_pretrained(nli_model_name, cache_dir=cache_dir)
-        self.nli = AutoModelForSequenceClassification.from_pretrained(nli_model_name, cache_dir=cache_dir).eval()
-
-
-        # For computing the combined score, alpha is the weight that balances the two components
-        # A higher alpha means more weight on Q_recall, and a lower alpha means more weight on A_entail
-        self.alpha = alpha
+        self.encoder_model_name = encoder_model_name
+        self.encoder = SentenceTransformer(self.encoder_model_name, cache_folder=cache_dir)
 
 
     def prepare_dataset(self, gold: dict, pred: dict):
@@ -66,68 +56,111 @@ class SemQA:
 
         return gold_qs, gold_as, pred_qs, pred_as
 
-    def _calculate_Q_recall(self, gold_qs, pred_qs):
-        # Encoding the questions
-        q_emb_g = self.q_encoder.encode(gold_qs, convert_to_tensor=True)
-        q_emb_p = self.q_encoder.encode(pred_qs, convert_to_tensor=True)
+    def _q_score_hungarian(self, gold_qs, pred_qs):
+        """
+        Compute the Hungarian matching score between gold and pred questions.
+        """
+        # Encode the questions
+        em_g = self.encoder.encode(gold_qs, convert_to_tensor=True)
+        em_p = self.encoder.encode(pred_qs, convert_to_tensor=True)
 
-        # Calculating the cost
-        # This is based on cosine similarity between the question embeddings
-        cost = 1 - util.cos_sim(q_emb_g, q_emb_p).cpu().numpy()
+        # Calculate the cost matrix based on hungarian matching
+        cost = 1 - util.cos_sim(em_g, em_p).cpu().numpy()
+        row, col = linear_sum_assignment(cost)
+        sims = 1 - cost[row, col]
 
-        # Hungarian match to minimize cost (maximize sim)
-        # Linear sum assignment is the Hungarian algorithm
-        # https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linear_sum_assignment.html
-        # The row and column indices of the optimal assignment are returned
-        sim_matrix = linear_sum_assignment(cost)
-        self.row, self.col = sim_matrix
+        # Return the mean similarity, tha matched pairs, and the raw similarities
+        return sims.mean(), list(zip(row, col)), sims
 
-        # Similarity scores for the matched pairs
-        sims = 1 - cost[self.row, self.col] 
+    def _q_score_softmax(self, gold_qs, pred_qs):
+        """
+        Compute the softmax of the cosine similarity between gold and pred questions.
+        """
+        # Encode the questions
+        em_g = self.encoder.encode(gold_qs, convert_to_tensor=True)
+        em_p = self.encoder.encode(pred_qs, convert_to_tensor=True)
+        
 
-        # Q_recall is the mean of the similarity scores
+        # Compute cosine similarity
+        sim = util.cos_sim(em_g, em_p)
+
+        # Calculate the softmax of the cosine similarity
+        probs = torch.softmax(sim, dim=1)
+        
+        # Get the mean of the probabilities
+        return probs.mean().item()
+
+    
+    def _a_score_hungarian_filtered( self, gold_as, pred_as, matched_pairs, raw_sims, threshold: float = 0.5, top_k: int = None):
+
+        # Filter out any pairs below threshold
+        filtered = [
+            (g_idx, p_idx, sim)
+            for (g_idx, p_idx), sim in zip(matched_pairs, raw_sims)
+            if sim >= threshold
+        ]
+
+        # If top_k specified, take top_k by sim descending
+        if top_k is not None:
+            filtered = sorted(filtered, key=lambda x: x[2], reverse=True)[:top_k]
+
+        if not filtered:
+            return 0.0
+
+        # Build filtered answer lists
+        gold_f = [gold_as[g] for g, _, _ in filtered]
+        pred_f = [pred_as[p] for _, p, _ in filtered]
+
+        em_g = self.encoder.encode(gold_f, convert_to_tensor=True)
+        em_p = self.encoder.encode(pred_f, convert_to_tensor=True)
+
+        cost = 1 - util.cos_sim(em_g, em_p).cpu().numpy()
+        row, col = linear_sum_assignment(cost)
+        sims = 1 - cost[row, col]
+
         return sims.mean()
 
-    def calculate_A_entail(self, gold_as, pred_as):
-        # Check that the similarity matrix has been computed
-        if not hasattr(self, 'row') or not hasattr(self, 'col'):
-            raise ValueError("Q_recall must be calculated before A_entail.")
+    def score(self, gold_qs, pred_qs, gold_as, pred_as, alpha:float = 0.5, variation: str = "hungarian", threshold: float = 0.5, top_k: int = None):
 
-        # now for each matched pair compute NLI entail/neutral probability
-        entail_scores = []
-        for i,j in zip(self.row, self.col):
-            premise, hypothesis = pred_as[j], gold_as[i]
-            enc = self.tok(premise, hypothesis, return_tensors="pt", truncation=True)
-            with torch.no_grad():
-                logits = self.nli(**enc).logits.squeeze()
-                probs = torch.softmax(logits, dim=-1)
-            # bart-mnli: labels are [contradiction, neutral, entailment]
-            entail_scores.append((probs[1] + probs[2]).item())
+        # Check that the variation is valid
+        if variation not in ("hungarian", "softmax"):
+            raise ValueError("variation must be 'hungarian' or 'softmax'")
 
-        A_entail = np.mean(entail_scores)
+        # Question score
+        t0 = time.perf_counter()
+        if variation == "hungarian":
+            q_score, matched_pairs, raw_sims = self._q_score_hungarian(gold_qs, pred_qs)
+        else:
+            q_score = self._q_score_softmax(gold_qs, pred_qs)
+            # dummy placeholders so code compiles
+            matched_pairs, raw_sims = [], []
+        q_time = time.perf_counter() - t0
 
-        return A_entail
-
-    def score(self, gold_qs, pred_qs, gold_as, pred_as):
-        # Compute Q_recall
-        start = time.perf_counter()
-        Q_recall = self._calculate_Q_recall(gold_qs, pred_qs)
-        q_recall_elapsed = time.perf_counter() - start
-
-        # Compute A_entail
-        start = time.perf_counter()
-        A_entail = self.calculate_A_entail(gold_as, pred_as)    
-        entail_elapsed = time.perf_counter() - start
+        # Answer score 
+        t1 = time.perf_counter()
+        a_score = self._a_score_hungarian_filtered(
+            gold_as, pred_as,
+            matched_pairs=matched_pairs,
+            raw_sims=raw_sims,
+            threshold=threshold,
+            top_k=top_k
+        )
+        a_time = time.perf_counter() - t1
 
 
-        # Calculate the composite score, by using the alpha parameter
-        composite = self.alpha * Q_recall + (1 - self.alpha) * A_entail
+        # Calulate the composite score
+        composite = alpha * q_score + (1 - alpha) * a_score
 
-        # Return the scores and compute times
+
+        # Return the scores
         return {
-            "semqa_q":  Q_recall,
-            "semqa_a":  A_entail,
-            "semqa_q_time": q_recall_elapsed,
-            "semqa_a_time": entail_elapsed,
-            "semqa_combined": composite,
+            "semqa_variation":     variation,
+            "semqa_threshold":     threshold,
+            "semqa_top_k":         top_k,
+            "semqa_alpha":         alpha,
+            "semqa_q_score":       q_score,
+            "semqa_a_score":       a_score,
+            "semqa_q_time":        q_time,
+            "semqa_a_time":        a_time,
+            "semqa_composite":     composite,
         }

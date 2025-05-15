@@ -103,12 +103,6 @@ def build_results(sub_preds, sub_gold, averi, ev2r_scorer, q_recalls, qa_recalls
         q_rec  = q_recalls[j]
         qa_rec = qa_recalls[j]
 
-        # debug for zero/NaN
-        if q_rec == 0 or math.isnan(q_rec):
-            print(f"[DEBUG] Example {g['id']}: Q-only recall is zero or NaN")
-        if qa_rec == 0 or math.isnan(qa_rec):
-            print(f"[DEBUG] Example {g['id']}: Q+A recall is zero or NaN")
-
         rows.append({
             "id":                   g["id"],
             "claim":                g["claim"],
@@ -116,8 +110,6 @@ def build_results(sub_preds, sub_gold, averi, ev2r_scorer, q_recalls, qa_recalls
             "pred_json":            json.dumps(p),
             "gold_label":           g["label"],
             "pred_label":           p["pred_label"],
-            "gold_serialized":      serialize_av_pairs_from_gold(g),
-            "pred_serialized":      serialize_av_pairs_from_pred(p),
             "Q_only_hungarian":     float(q_hung),
             "Q_only_hungarian_time":t_q_hung,
             "QA_hungarian":         float(qa_hung),
@@ -147,7 +139,7 @@ def main():
     p.add_argument("--prediction_file", default=BASELINE_PREDICTION_PATH)
     p.add_argument("--gold_file",       default=GOLD_PREDICTION_PATH)
     p.add_argument("--examples", type=int, default=200)
-    p.add_argument("--output_csv",      default="train_200.csv")
+    p.add_argument("--output_csv",type=str, default="train_200.csv")
     args = p.parse_args()
 
     download_resources()
@@ -181,9 +173,13 @@ def main():
         q_batch, qa_batch
     )
 
-    print(f"Writing out {args.output_csv}")
-    df_results.to_csv(args.output_csv, index=False)
-    print(df_results.head())
+    print("Length of results DataFrame:", len(df_results))
 
+    print(f"Writing out {args.output_csv}")
+    df_results.to_csv(args.output_csv, index=False, sep="\t")
+    print("Done.")
+    print(df_results.head())
+    print("Length of results DataFrame:", len(df_results))
+    print("Column names:", df_results.columns)
 if __name__ == "__main__":
     main()
