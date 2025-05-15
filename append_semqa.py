@@ -13,7 +13,7 @@ from semqa import SemQA
 # Constants 
 DATASET_SPLIT = "dev_super_small"
 ROOT_PATH = "/cluster/work/projects/ec403/ec-kjetiki/ExamIN5550/"
-INPUT_PATH = f"{ROOT_PATH}output.csv"
+INPUT_PATH = f"{ROOT_PATH}train_200.csv"
 
 
 def main():
@@ -49,20 +49,18 @@ def main():
         if index % 20 == 0:
             print(f"\tRow {index}/{len(df)}")
 
-
-        # Extract the gold and pred data from the DataFrame
-        gold = row['gold']
-        pred = row['pred']
-
         # Convert the JSON strings to dictionaries
-        gold_dict = json.loads(gold)
-        pred_dict = json.loads(pred)
+        gold_dict = json.loads(row['gold_json'])
+        pred_dict = json.loads(row['pred_json'])
 
         # Prepare the dataset
         gold_qs, gold_as, pred_qs, pred_as = semqa_scorer.prepare_dataset(gold_dict, pred_dict)
-
-        # Compute the scores
-        output_dict = semqa_scorer.compute_scores(gold_qs, gold_as, pred_qs, pred_as, alpha=args.alpha, threshold=args.threshold, top_k=args.top_k, variation=args.variation)
+        output_dict = semqa_scorer.score(
+            gold_qs=gold_qs, pred_qs=pred_qs,
+            gold_as=gold_as, pred_as=pred_as,
+            alpha=args.alpha, variation=args.variation,
+            threshold=args.threshold, top_k=args.top_k
+        )
 
         # Add each item in the output_dict to the DataFrame
         for key, value in output_dict.items():
@@ -91,6 +89,14 @@ def main():
     print("Column names:", df.columns)
     print("First few rows of the DataFrame:")
     print(df.head())
+
+
+    # Calculate the average times for each metric
+    print("Calculating average times for each metric:")
+    for key in df.columns:
+        if "time" in key:
+            avg_time = df[key].mean()
+            print(f"\t{key}: {avg_time:.4f} seconds")
 
 if __name__ == "__main__":
     main()
