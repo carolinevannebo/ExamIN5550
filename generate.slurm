@@ -30,4 +30,4 @@ echo "submission directory: ${SUBMITDIR}"
 
 
 # Run system on GPU
-python manual_eval.py
+python generate.py
