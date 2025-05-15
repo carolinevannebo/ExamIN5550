@@ -112,6 +112,12 @@ def build_results(sub_preds, sub_gold, averi, ev2r_scorer, q_recalls, qa_recalls
         rows.append({
             "id":                   g["id"],
             "claim":                g["claim"],
+            "gold_json":            json.dumps(g),
+            "pred_json":            json.dumps(p),
+            "gold_label":           g["label"],
+            "pred_label":           p["pred_label"],
+            "gold_serialized":      serialize_av_pairs_from_gold(g),
+            "pred_serialized":      serialize_av_pairs_from_pred(p),
             "Q_only_hungarian":     float(q_hung),
             "Q_only_hungarian_time":t_q_hung,
             "QA_hungarian":         float(qa_hung),
@@ -120,16 +126,16 @@ def build_results(sub_preds, sub_gold, averi, ev2r_scorer, q_recalls, qa_recalls
             "AVeriTeC_time":        t_ee,
             "Ev2R_Q_only_recall":   float(q_rec),
             "Ev2R_Q_only_batch":    q_batch,
-            "Ev2R_Q_only_per_ex":   q_batch / len(sub_preds),
+            "Ev2R_Q_only_per_ex_time":   q_batch / len(sub_preds),
             "Ev2R_QA_recall":       float(qa_rec),
             "Ev2R_QA_batch":        qa_batch,
-            "Ev2R_QA_per_ex":       qa_batch / len(sub_preds),
+            "Ev2R_QA_per_ex_time":       qa_batch / len(sub_preds),
         })
     return pd.DataFrame(rows)
 
 
 # Constants 
-DATASET_SPLIT = "dev_super_small"
+DATASET_SPLIT = "train_200"
 ROOT_PATH = "/cluster/work/projects/ec403/ec-kjetiki/ExamIN5550/"
 DATASTORE_PATH = "/cluster/work/projects/ec403/ec-kjetiki/ExamIN5550/data_store"
 BASELINE_PREDICTION_PATH = f"{DATASTORE_PATH}/baseline/{DATASET_SPLIT}_veracity_prediction.json"
@@ -140,8 +146,8 @@ def main():
     p = argparse.ArgumentParser(description="Per‐example evaluation")
     p.add_argument("--prediction_file", default=BASELINE_PREDICTION_PATH)
     p.add_argument("--gold_file",       default=GOLD_PREDICTION_PATH)
-    p.add_argument("--examples", type=int, default=5)
-    p.add_argument("--output_csv",      default="output.csv")
+    p.add_argument("--examples", type=int, default=200)
+    p.add_argument("--output_csv",      default="train_200.csv")
     args = p.parse_args()
 
     download_resources()
