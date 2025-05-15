@@ -28,6 +28,14 @@ if [ ! -d "$BASE_PATH/knowledge_store/dev" ]; then
     rm $BASE_PATH/knowledge_store/dev_knowledge_store.zip
 fi
 
+# For knowledge store - train dataset (first 1000 only)
+if [ ! -d "$BASE_PATH/knowledge_store/train" ]; then
+    wget https://huggingface.co/chenxwh/AVeriTeC/resolve/main/data_store/knowledge_store/train/train_0_999.zip -O $BASE_PATH/knowledge_store/train_knowledge_store.zip
+    unzip $BASE_PATH/knowledge_store/train_knowledge_store.zip -d $BASE_PATH/knowledge_store/
+    mv $BASE_PATH/knowledge_store/output_train $BASE_PATH/knowledge_store/train
+    rm $BASE_PATH/knowledge_store/train_knowledge_store.zip
+fi
+
 # For knowledge store - test set
 if [ ! -d "$BASE_PATH/knowledge_store/test_2025" ]; then
     # Get list of zip files from the test_2025 directory

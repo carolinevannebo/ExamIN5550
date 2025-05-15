@@ -123,10 +123,11 @@ class SemQA:
         # Calculate the composite score, by using the alpha parameter
         composite = self.alpha * Q_recall + (1 - self.alpha) * A_entail
 
+        # Return the scores and compute times
         return {
-            "Q_recall":  Q_recall,
-            "A_entail":  A_entail,
-            "composite": composite,
-            "Q_recall_elapsed": q_recall_elapsed,
-            "A_entail_elapsed": entail_elapsed,
+            "semqa_q":  Q_recall,
+            "semqa_a":  A_entail,
+            "semqa_q_time": q_recall_elapsed,
+            "semqa_a_time": entail_elapsed,
+            "semqa_combined": composite,
         }
