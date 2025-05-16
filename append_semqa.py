@@ -21,7 +21,6 @@ def main():
     p.add_argument("--input_csv", default=INPUT_PATH)
     p.add_argument("--alpha", type=float, default=0.8)
     p.add_argument("--threshold", type=float, default=0.8)
-    p.add_argument("--top_k", type=int, default=8)
     p.add_argument("--variation", type=str, default="hungarian")
     args = p.parse_args()
 
@@ -59,13 +58,13 @@ def main():
             gold_qs=gold_qs, pred_qs=pred_qs,
             gold_as=gold_as, pred_as=pred_as,
             alpha=args.alpha, variation=args.variation,
-            threshold=args.threshold, top_k=args.top_k
+            threshold=args.threshold
         )
 
         # Add each item in the output_dict to the DataFrame
         for key, value in output_dict.items():
             # Do not add the following keys to the DataFrame: 
-            if key in ["semqa_variation", "semqa_threshold", "semqa_top_k", "semqa_alpha"]:
+            if key in ["semqa_variation", "semqa_threshold", "semqa_alpha"]:
                 continue
 
             # Add the key value pait to the dataframe at given index

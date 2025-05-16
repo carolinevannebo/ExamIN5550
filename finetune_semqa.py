@@ -12,12 +12,11 @@ import random
 PRE_CALC_METRICS = [
     "Q_only_hungarian",
     "QA_hungarian",
-    "AVeriTeC_end_to_end",
     "Ev2R_Q_only_recall",
     "Ev2R_QA_recall",
 ]
 
-def run_config(df, semqa, alpha, threshold, top_k, q_variation, a_variation):
+def run_config(df, semqa, alpha, threshold, variation):
     """
     Given a DataFrame and a SemQA config, compute SemQA scores
     and return a new DataFrame with a 'semqa_score' column.
@@ -32,12 +31,14 @@ def run_config(df, semqa, alpha, threshold, top_k, q_variation, a_variation):
         out = semqa.score(
             gold_qs=gold_qs, pred_qs=pred_qs,
             gold_as=gold_as, pred_as=pred_as, 
-            q_variation=q_variation, a_variation=a_variation,
-            threshold=threshold, top_k=top_k, alpha=alpha,
+            variation=variation,
+            threshold=threshold, alpha=alpha,
         )
 
         # get the composite score
         scores.append(out["semqa_composite"])
+
+
     df2 = df.copy()
     df2["semqa_score"] = scores
     return df2
@@ -66,9 +67,8 @@ def main():
     p.add_argument("--alphas",     nargs="+", type=float, default=[0.2, 0.3, 0.7, 0.8, 0.9, 1.0])
     p.add_argument("--thresholds", nargs="+", type=float, default=[0.1, 0.2, 0.3, 0.5, 0.8])
     p.add_argument("--top_ks",     nargs="+", type=int,   default=[None, 1, 3,  5])
-    p.add_argument("--q_variations", nargs="+", type=str, default=["hungarian", "softmax"])
-    p.add_argument("--a_variations", nargs="+", type=str, default=["hungarian", "entailment"])
-    p.add_argument("--max_configs", type=int, default=40, help="maximum number of hyperparameter combinations to run")
+    p.add_argument("--variation", nargs="+", type=str, default=["hungarian", "softmax"])
+    p.add_argument("--max_configs", type=int, default=5, help="maximum number of hyperparameter combinations to run")
     args = p.parse_args()
     
 
@@ -84,17 +84,17 @@ def main():
 
     # Dataset with precomputed metrics
     all_combos = list(itertools.product(
-        args.alphas, args.thresholds, args.top_ks, args.q_variation, args.a_variation
+        args.alphas, args.thresholds, args.variation
     ))
     random.shuffle(all_combos)
     combos_to_run = all_combos[: args.max_configs]
 
-    print("Running SemQA grid seatch with maxum of", args.max_configs, "configs")
+    print("Running SemQA grid search with maximum of", args.max_configs, "configs")
 
 
     # Run the grid search
-    for alpha, thr, k, q_var, a_var in combos_to_run:
-        cfg_name = f"alpha={alpha}, theshold={thr}, k={k}, q_variation={q_var}, a_variation={a_var}"
+    for alpha, thr, var in combos_to_run:
+        cfg_name = f"alpha={alpha}, theshold={thr}, variation={var}"
         print("\n" + "="*len(cfg_name))
         print(cfg_name)
         print("="*len(cfg_name))
@@ -103,10 +103,8 @@ def main():
         print("Running SemQA with config:", cfg_name)
         print("  - alpha:", alpha)
         print("  - threshold:", thr)
-        print("  - top_k:", k)
-        print("  - q variation:", q_var)
-        print("  - a variation:", a_var)
-        df_scored = run_config(df0, semqa, alpha, thr, k, q_var, a_var)
+        print("  - variation:", var)
+        df_scored = run_config(df0, semqa, alpha, thr, var)
 
         print("Computing correlations")
         df_corr   = summarize_correlations(df_scored)
