@@ -20,7 +20,7 @@ def main():
     p = argparse.ArgumentParser(description="Per‐example evaluation")
     p.add_argument("--input_csv", default=INPUT_PATH)
     p.add_argument("--alpha", type=float, default=0.8)
-    p.add_argument("--threshold", type=float, default=0.8)
+    p.add_argument("--threshold", type=float, default=0.2)
     p.add_argument("--variation", type=str, default="hungarian")
     args = p.parse_args()
 
